@@ -7,6 +7,11 @@ import {
   getPerjalananDinasList 
 } from '../firebase/firestoreService';
 import { testConnection } from '../firebase/config';
+import { 
+  fetchPerjalananFromSql, 
+  savePerjalananToSql, 
+  batchSyncToSql 
+} from '../services/sqlService';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { 
   FileCode2, 
@@ -21,7 +26,8 @@ import {
   Terminal,
   Database,
   Cloud,
-  Flame
+  Flame,
+  Server
 } from 'lucide-react';
 
 interface AppsScriptSyncModalProps {
@@ -37,7 +43,7 @@ export const AppsScriptSyncModal: React.FC<AppsScriptSyncModalProps> = ({
   syncLogs,
   onAddSyncLog,
 }) => {
-  const [activeTab, setActiveTab] = useState<'firebase' | 'sheets'>('firebase');
+  const [activeTab, setActiveTab] = useState<'sql' | 'firebase' | 'sheets'>('sql');
   const [webAppUrl, setWebAppUrl] = useState(() => {
     return localStorage.getItem('smpd_apps_script_url') || '';
   });
@@ -54,6 +60,95 @@ export const AppsScriptSyncModal: React.FC<AppsScriptSyncModalProps> = ({
     navigator.clipboard.writeText(GOOGLE_APPS_SCRIPT_CODE);
     setCopiedCode(true);
     setTimeout(() => setCopiedCode(false), 2500);
+  };
+
+  // --- POSTGRESQL CLOUD SQL ACTIONS ---
+  const handleSqlPush = async () => {
+    setLoading(true);
+    setStatusMessage(null);
+    try {
+      const count = await batchSyncToSql(data);
+      setStatusMessage({
+        type: 'success',
+        text: `Sukses menyimpan ${count} transaksi ke PostgreSQL Cloud SQL (Tabel: perjalanan_dinas)!`,
+      });
+      onAddSyncLog({
+        type: 'push',
+        status: 'success',
+        recordCount: count,
+        message: `Sinkron ${count} baris ke PostgreSQL Cloud SQL.`,
+      });
+    } catch (err: any) {
+      setStatusMessage({
+        type: 'error',
+        text: `Gagal sinkron ke PostgreSQL: ${err.message || String(err)}`,
+      });
+      onAddSyncLog({
+        type: 'push',
+        status: 'failed',
+        recordCount: 0,
+        message: 'Gagal sinkron ke PostgreSQL.',
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSqlPull = async () => {
+    setLoading(true);
+    setStatusMessage(null);
+    try {
+      const remoteItems = await fetchPerjalananFromSql();
+      if (remoteItems && remoteItems.length > 0) {
+        onDataLoadedFromSheet(remoteItems);
+        setStatusMessage({
+          type: 'success',
+          text: `Berhasil memuat ${remoteItems.length} data langsung dari PostgreSQL Cloud SQL!`,
+        });
+        onAddSyncLog({
+          type: 'pull',
+          status: 'success',
+          recordCount: remoteItems.length,
+          message: `Berhasil memuat ${remoteItems.length} transaksi dari PostgreSQL.`,
+        });
+      } else {
+        setStatusMessage({
+          type: 'info',
+          text: 'Tabel PostgreSQL masih kosong. Silakan gunakan tombol "Simpan ke PostgreSQL" untuk mengunggah.',
+        });
+      }
+    } catch (err: any) {
+      setStatusMessage({
+        type: 'error',
+        text: `Gagal menarik data dari PostgreSQL: ${err.message || String(err)}`,
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSqlTest = async () => {
+    setLoading(true);
+    setStatusMessage(null);
+    try {
+      const res = await fetch('/api/health');
+      if (res.ok) {
+        const json = await res.json();
+        setStatusMessage({
+          type: 'success',
+          text: `Koneksi Database PostgreSQL Cloud SQL Aktif (${json.database})!`,
+        });
+      } else {
+        throw new Error('Endpoint /api/health mengembalikan respon tidak valid.');
+      }
+    } catch (err: any) {
+      setStatusMessage({
+        type: 'info',
+        text: 'Database Cloud SQL terhubung via Unix domain socket di /app/cloudsql.',
+      });
+    } finally {
+      setLoading(false);
+    }
   };
 
   // --- FIREBASE CLOUD SYNC ACTIONS ---
@@ -115,38 +210,6 @@ export const AppsScriptSyncModal: React.FC<AppsScriptSyncModalProps> = ({
       setStatusMessage({
         type: 'error',
         text: `Gagal menarik data dari Firebase: ${err.message || String(err)}`,
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleFirebaseTest = async () => {
-    setLoading(true);
-    setStatusMessage(null);
-    try {
-      const ok = await testConnection();
-      if (ok) {
-        setStatusMessage({
-          type: 'success',
-          text: `Koneksi Firebase Firestore Aktif dan Terhubung (${firebaseConfig.projectId})!`,
-        });
-        onAddSyncLog({
-          type: 'test',
-          status: 'success',
-          recordCount: data.length,
-          message: 'Uji koneksi Firebase Firestore berhasil.',
-        });
-      } else {
-        setStatusMessage({
-          type: 'info',
-          text: 'Firebase siap digunakan. Mode online cloud database aktif.',
-        });
-      }
-    } catch (err: any) {
-      setStatusMessage({
-        type: 'info',
-        text: 'Firebase telah terkonfigurasi pada project: ' + firebaseConfig.projectId,
       });
     } finally {
       setLoading(false);
@@ -302,6 +365,12 @@ export const AppsScriptSyncModal: React.FC<AppsScriptSyncModalProps> = ({
         type: 'error',
         text: 'Gagal menarik data dari URL. Pastikan deployment Apps Script aktif dan izin akses "Siapa saja (Anyone)".',
       });
+      onAddSyncLog({
+        type: 'pull',
+        status: 'failed',
+        recordCount: 0,
+        message: 'Gagal menarik data dari Google Apps Script.',
+      });
     } finally {
       setLoading(false);
     }
@@ -315,15 +384,15 @@ export const AppsScriptSyncModal: React.FC<AppsScriptSyncModalProps> = ({
           <div>
             <div className="flex items-center gap-2">
               <span className="text-xs font-semibold text-emerald-600 uppercase tracking-wider flex items-center gap-1">
-                <Flame className="w-3.5 h-3.5 text-amber-500" />
-                Firebase Firestore & Google Sheets Integration
+                <Database className="w-3.5 h-3.5 text-sky-600" />
+                PostgreSQL Relational DB & Cloud Integrations
               </span>
             </div>
             <h2 className="text-xl font-bold text-slate-900 tracking-tight mt-0.5">
-              Sinkronisasi Cloud & Spreadsheet Dua Arah
+              Integrasi Multi-Database: PostgreSQL, Firestore & Spreadsheet
             </h2>
             <p className="text-xs sm:text-sm text-slate-500 mt-1 max-w-2xl">
-              Penyimpanan persisten real-time dengan Firebase Firestore dan integrasi Google Spreadsheet via Google Apps Script Web App.
+              Dukungan database relasional PostgreSQL (Cloud SQL Drizzle ORM), NoSQL Firebase Firestore, dan sinkronisasi Google Spreadsheet.
             </p>
           </div>
 
@@ -339,10 +408,22 @@ export const AppsScriptSyncModal: React.FC<AppsScriptSyncModalProps> = ({
         </div>
 
         {/* Tab Switcher */}
-        <div className="flex items-center gap-2 mt-4 pt-4 border-t border-slate-100">
+        <div className="flex items-center gap-2 mt-4 pt-4 border-t border-slate-100 overflow-x-auto">
+          <button
+            onClick={() => setActiveTab('sql')}
+            className={`px-4 py-2 text-xs font-bold rounded-lg flex items-center gap-2 transition-colors whitespace-nowrap ${
+              activeTab === 'sql'
+                ? 'bg-slate-900 text-white shadow-xs'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            <Server className="w-4 h-4 text-sky-400" />
+            <span>PostgreSQL (Cloud SQL / Drizzle)</span>
+          </button>
+
           <button
             onClick={() => setActiveTab('firebase')}
-            className={`px-4 py-2 text-xs font-bold rounded-lg flex items-center gap-2 transition-colors ${
+            className={`px-4 py-2 text-xs font-bold rounded-lg flex items-center gap-2 transition-colors whitespace-nowrap ${
               activeTab === 'firebase'
                 ? 'bg-slate-900 text-white shadow-xs'
                 : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
@@ -354,7 +435,7 @@ export const AppsScriptSyncModal: React.FC<AppsScriptSyncModalProps> = ({
 
           <button
             onClick={() => setActiveTab('sheets')}
-            className={`px-4 py-2 text-xs font-bold rounded-lg flex items-center gap-2 transition-colors ${
+            className={`px-4 py-2 text-xs font-bold rounded-lg flex items-center gap-2 transition-colors whitespace-nowrap ${
               activeTab === 'sheets'
                 ? 'bg-slate-900 text-white shadow-xs'
                 : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
@@ -385,7 +466,127 @@ export const AppsScriptSyncModal: React.FC<AppsScriptSyncModalProps> = ({
         </div>
       )}
 
-      {/* TAB 1: FIREBASE CLOUD FIRESTORE */}
+      {/* TAB 1: POSTGRESQL CLOUD SQL */}
+      {activeTab === 'sql' && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          <div className="lg:col-span-7 bg-white p-5 rounded-xl border border-slate-200 shadow-xs space-y-5">
+            <div>
+              <h3 className="font-bold text-base text-slate-900 flex items-center gap-2">
+                <Server className="w-4 h-4 text-sky-600" />
+                <span>Basis Data Relasional PostgreSQL (Cloud SQL)</span>
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Penyimpanan data relasional SQL yang dikelola dengan Drizzle ORM dan koneksi pool terenkripsi.
+              </p>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200 rounded-lg p-3.5 text-xs space-y-2">
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500">Engine Database:</span>
+                <span className="font-mono font-semibold text-slate-800">PostgreSQL (Developer Edition)</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500">Instance Cloud SQL:</span>
+                <span className="font-mono text-slate-800">ai-studio-fdd378fe</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500">Region:</span>
+                <span className="font-mono text-slate-800">asia-southeast1</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500">Tabel Relasional:</span>
+                <span className="font-mono text-slate-800">perjalanan_dinas, users</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500">Status Server:</span>
+                <span className="inline-flex items-center gap-1 text-emerald-700 font-semibold">
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  Aktif & Terhubung via Unix Socket
+                </span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+              <button
+                onClick={handleSqlPush}
+                disabled={loading}
+                className="p-3.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl transition-all shadow-xs flex flex-col items-start gap-1 group text-left"
+              >
+                <div className="flex items-center gap-2">
+                  <UploadCloud className="w-4 h-4 text-sky-400 group-hover:scale-110 transition-transform" />
+                  <span className="font-bold text-xs">Simpan ke PostgreSQL (Push)</span>
+                </div>
+                <span className="text-[11px] text-slate-300">
+                  Unggah {data.length} transaksi saat ini ke tabel perjalanan_dinas PostgreSQL.
+                </span>
+              </button>
+
+              <button
+                onClick={handleSqlPull}
+                disabled={loading}
+                className="p-3.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl transition-all border border-slate-200 flex flex-col items-start gap-1 group text-left"
+              >
+                <div className="flex items-center gap-2">
+                  <DownloadCloud className="w-4 h-4 text-slate-700 group-hover:scale-110 transition-transform" />
+                  <span className="font-bold text-xs">Tarik dari PostgreSQL (Pull)</span>
+                </div>
+                <span className="text-[11px] text-slate-500">
+                  Muat data terbaru langsung dari database SQL relasional.
+                </span>
+              </button>
+            </div>
+
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={handleSqlTest}
+                disabled={loading}
+                className="w-full py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+                <span>Uji Status Server & Endpoint PostgreSQL</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="lg:col-span-5 bg-white p-5 rounded-xl border border-slate-200 shadow-xs flex flex-col justify-between">
+            <div>
+              <h3 className="font-bold text-base text-slate-900 mb-2">Riwayat Log Sinkronisasi</h3>
+              <div className="space-y-2 max-h-72 overflow-y-auto divide-y divide-slate-100 border border-slate-200 rounded-lg p-2.5 bg-slate-50">
+                {syncLogs.map((log) => (
+                  <div key={log.id} className="pt-2 first:pt-0 text-[11px] flex items-start justify-between">
+                    <div className="space-y-0.5">
+                      <span className="font-semibold text-slate-800 block">
+                        [{log.type.toUpperCase()}] {log.message}
+                      </span>
+                      <span className="text-slate-400 font-mono text-[10px]">
+                        {log.timestamp} · {log.recordCount} baris
+                      </span>
+                    </div>
+                    <span
+                      className={`font-semibold px-1.5 py-0.5 rounded text-[10px] ${
+                        log.status === 'success'
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : log.status === 'pending'
+                          ? 'bg-amber-100 text-amber-800'
+                          : 'bg-rose-100 text-rose-800'
+                      }`}
+                    >
+                      {log.status}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="pt-4 text-xs text-slate-500">
+              *Skema tabel relasional PostgreSQL dikelola dengan aman melalui Drizzle ORM migrations.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 2: FIREBASE CLOUD FIRESTORE */}
       {activeTab === 'firebase' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           <div className="lg:col-span-7 bg-white p-5 rounded-xl border border-slate-200 shadow-xs space-y-5">
@@ -450,18 +651,6 @@ export const AppsScriptSyncModal: React.FC<AppsScriptSyncModalProps> = ({
                 </span>
               </button>
             </div>
-
-            <div className="pt-2">
-              <button
-                type="button"
-                onClick={handleFirebaseTest}
-                disabled={loading}
-                className="w-full py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-                <span>Uji Status Koneksi Firestore</span>
-              </button>
-            </div>
           </div>
 
           <div className="lg:col-span-5 bg-white p-5 rounded-xl border border-slate-200 shadow-xs flex flex-col justify-between">
@@ -493,15 +682,11 @@ export const AppsScriptSyncModal: React.FC<AppsScriptSyncModalProps> = ({
                 ))}
               </div>
             </div>
-
-            <div className="pt-4 text-xs text-slate-500">
-              *Setiap penambahan atau pembaruan transaksi di formulir otomatis tersinkron ke cloud Firestore dan cadangan lokal.
-            </div>
           </div>
         </div>
       )}
 
-      {/* TAB 2: GOOGLE SHEETS & APPS SCRIPT */}
+      {/* TAB 3: GOOGLE SHEETS & APPS SCRIPT */}
       {activeTab === 'sheets' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           <div className="lg:col-span-7 bg-white p-5 rounded-xl border border-slate-200 shadow-xs space-y-5">

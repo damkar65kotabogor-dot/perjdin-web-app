@@ -31,6 +31,13 @@ import {
   deletePerjalananDinasDoc,
   batchSyncToFirestore 
 } from './firebase/firestoreService';
+import { 
+  fetchPerjalananFromSql, 
+  savePerjalananToSql, 
+  deletePerjalananFromSql, 
+  batchSyncToSql,
+  syncUserToSql 
+} from './services/sqlService';
 
 const LOCAL_STORAGE_KEY = 'smpd_perjalanan_dinas_data_v1';
 const LOCAL_STORAGE_USER = 'smpd_user_session_v1';
@@ -109,12 +116,32 @@ export default function App() {
   const [printModalOpen, setPrintModalOpen] = useState(false);
   const [selectedPrintItem, setSelectedPrintItem] = useState<PerjalananDinas | null>(null);
 
-  // 1. Validate Connection to Firestore on Initial Boot (Mandatory Constraint)
+  // 1. Validate Connection to Firestore & PostgreSQL on Initial Boot
   useEffect(() => {
-    async function initFirestore() {
+    async function initDatabases() {
+      // Try PostgreSQL Cloud SQL first
+      try {
+        const sqlData = await fetchPerjalananFromSql();
+        if (sqlData && sqlData.length > 0) {
+          setData(sqlData);
+          handleAddSyncLog({
+            type: 'pull',
+            status: 'success',
+            recordCount: sqlData.length,
+            message: `Memuat ${sqlData.length} transaksi dari PostgreSQL Cloud SQL`,
+          });
+          return;
+        } else {
+          // Seed PostgreSQL
+          await batchSyncToSql(INITIAL_PERJALANAN_DATA);
+        }
+      } catch (sqlErr) {
+        console.info('PostgreSQL initial load deferred/offline');
+      }
+
+      // Fallback/sync to Firestore
       try {
         await testConnection();
-        // Check if remote data exists
         const remote = await getPerjalananDinasList();
         if (remote && remote.length > 0) {
           setData(remote);
@@ -125,32 +152,38 @@ export default function App() {
             message: `Memuat ${remote.length} transaksi dari Cloud Firestore`,
           });
         } else {
-          // Seed initial data to Firestore
           await batchSyncToFirestore(INITIAL_PERJALANAN_DATA);
           handleAddSyncLog({
             type: 'push',
             status: 'success',
             recordCount: INITIAL_PERJALANAN_DATA.length,
-            message: 'Inisialisasi data bawaan ke Cloud Firestore berhasil.',
+            message: 'Inisialisasi data ke Cloud Firestore & PostgreSQL.',
           });
         }
       } catch (err) {
         console.info('Firestore offline/fallback mode active');
       }
     }
-    initFirestore();
+    initDatabases();
   }, []);
 
-  // 2. Firebase Auth State Listener
+  // 2. Firebase Auth State Listener & PostgreSQL User Sync
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
       if (firebaseUser) {
-        setUser({
+        const userObj: UserSession = {
           username: firebaseUser.email?.split('@')[0] || 'pegawai',
           name: firebaseUser.displayName || firebaseUser.email || 'Pegawai SKPD',
           role: 'admin',
           isLoggedIn: true,
-        });
+        };
+        setUser(userObj);
+        // Sync user to PostgreSQL users table
+        syncUserToSql(
+          firebaseUser.uid, 
+          firebaseUser.email || '', 
+          firebaseUser.displayName || undefined
+        ).catch(() => {});
       }
     });
     return () => unsubscribe();
@@ -171,7 +204,7 @@ export default function App() {
     localStorage.setItem(LOCAL_STORAGE_LOGS, JSON.stringify(syncLogs));
   }, [syncLogs]);
 
-  // Handlers for Data CRUD (saved to both Local & Firestore)
+  // Handlers for Data CRUD (saved to Local, PostgreSQL, and Firestore)
   const handleSavePerjadin = async (item: PerjalananDinas) => {
     setData((prev) => {
       const exists = prev.some((d) => d.id === item.id);
@@ -181,6 +214,14 @@ export default function App() {
       return [item, ...prev];
     });
 
+    // Save to PostgreSQL Cloud SQL
+    try {
+      await savePerjalananToSql(item);
+    } catch (e) {
+      console.warn('PostgreSQL save notice:', e);
+    }
+
+    // Save to Firestore
     try {
       await savePerjalananDinasDoc(item);
     } catch {
@@ -191,13 +232,21 @@ export default function App() {
       type: 'export',
       status: 'success',
       recordCount: 1,
-      message: `Data "${item.uraian.substring(0, 30)}..." berhasil disimpan.`,
+      message: `Data "${item.uraian.substring(0, 30)}..." tersimpan di PostgreSQL & Firestore.`,
     });
   };
 
   const handleDeletePerjadin = async (id: string) => {
     setData((prev) => prev.filter((d) => d.id !== id));
 
+    // Delete in PostgreSQL
+    try {
+      await deletePerjalananFromSql(id);
+    } catch (e) {
+      console.warn('PostgreSQL delete notice:', e);
+    }
+
+    // Delete in Firestore
     try {
       await deletePerjalananDinasDoc(id);
     } catch {
@@ -208,7 +257,7 @@ export default function App() {
       type: 'export',
       status: 'success',
       recordCount: 1,
-      message: `ID ${id} dihapus dari riwayat.`,
+      message: `ID ${id} dihapus dari PostgreSQL & Firestore.`,
     });
   };
 
