@@ -1,0 +1,57 @@
+{
+  "entities": {
+    "perjalanan_dinas": {
+      "title": "PerjalananDinas",
+      "description": "Dokumen transaksi resmi perjalanan dinas SKPD dan pertanggungjawaban anggaran.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "ID unik perjalanan dinas" },
+        "bulan": { "type": "string", "description": "Bulan pelaksanaan dinas" },
+        "tahun": { "type": "number", "description": "Tahun anggaran dinas" },
+        "kodeRekeningKegiatan": { "type": "string", "description": "Kode rekening kegiatan DPA" },
+        "kodeRekeningBelanja": { "type": "string", "description": "Kode rekening belanja perjalanan dinas" },
+        "uraian": { "type": "string", "description": "Maksud dan tujuan perjalanan dinas" },
+        "kegiatan": { "type": "string", "description": "Nama kegiatan" },
+        "subKegiatan": { "type": "string", "description": "Nama sub kegiatan" },
+        "skpd": { "type": "string", "description": "Nama SKPD / Perangkat Daerah" },
+        "namaKantorTujuan": { "type": "string", "description": "Tempat atau kantor tujuan" },
+        "kotaTujuan": { "type": "string", "description": "Kota atau kabupaten tujuan" },
+        "jumlahTotal": { "type": "number", "description": "Total biaya seluruh komponen perjalanan dinas" },
+        "lamaPerjalananHari": { "type": "number", "description": "Durasi pelaksanaan dinas dalam hari" },
+        "tanggalBerangkat": { "type": "string", "description": "Tanggal mulai dinas" },
+        "tanggalKembali": { "type": "string", "description": "Tanggal selesai dinas" },
+        "namaHotel": { "type": "string", "description": "Nama hotel penginapan" },
+        "tanggalPembayaran": { "type": "string", "description": "Tanggal pembayaran SP2D" },
+        "keterangan": { "type": "string", "description": "Catatan tambahan pelaksanaan dinas" },
+        "statusApproval": { "type": "string", "description": "Status persetujuan dinas" },
+        "authorId": { "type": "string", "description": "UID pengguna pembuat dokumen" },
+        "createdAt": { "type": "string", "description": "Waktu pembuatan dokumen" },
+        "updatedAt": { "type": "string", "description": "Waktu pembaruan dokumen" }
+      },
+      "required": ["id", "bulan", "tahun", "uraian", "skpd", "kotaTujuan", "jumlahTotal"]
+    },
+    "user_profile": {
+      "title": "UserProfile",
+      "description": "Profil pengguna sistem manajemen perjalanan dinas",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "User ID Firebase Authentication" },
+        "displayName": { "type": "string", "description": "Nama lengkap pegawai" },
+        "email": { "type": "string", "description": "Email pegawai" },
+        "role": { "type": "string", "enum": ["admin", "operator"], "description": "Peran sistem" },
+        "createdAt": { "type": "string", "description": "Waktu pendaftaran akun" }
+      },
+      "required": ["uid", "email", "role"]
+    }
+  },
+  "firestore": {
+    "/perjalanan_dinas/{perjadinId}": {
+      "schema": { "$ref": "perjalanan_dinas" },
+      "description": "Koleksi data perjalanan dinas SMPD"
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "user_profile" },
+      "description": "Koleksi profil pengguna"
+    }
+  }
+}

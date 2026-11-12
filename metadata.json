@@ -1,0 +1,6 @@
+{
+  "name": "SMPD - Sistem Manajemen Perjalanan Dinas",
+  "description": "Sistem Manajemen Perjalanan Dinas (E-Perjalanan Dinas) terintegrasi Google Spreadsheet dan Apps Script dengan pengelolaan anggaran, pagu, realisasi, SPPD, dan cetak laporan.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
